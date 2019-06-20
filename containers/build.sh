@@ -12,8 +12,9 @@ my_file="$(readlink -e "$0")"
 my_dir="$(dirname $my_file)"
 source "$my_dir/../parse-env.sh"
 
+parallel="${CCB_PARALLEL_BUILD:-0}"
+
 path="$1"
-shift
 opts="$@"
 
 echo "INFO: Target platform: $LINUX_DISTR:$LINUX_DISTR_VER"
@@ -27,6 +28,11 @@ echo "INFO: yum additional repos to enable: $YUM_ENABLE_REPOS"
 
 if [ -n "$opts" ]; then
   echo "INFO: Options: $opts"
+fi
+
+if [ "$parallel" == "1" ]; then
+  echo "INFO: Build would be processed in parallel mode"
+  source "$my_dir/create-map.sh"
 fi
 
 docker_ver=$(docker -v | awk -F' ' '{print $3}' | sed 's/,//g')
@@ -46,7 +52,6 @@ function process_container() {
   local container_name=`echo ${dir#"./"} | tr "/" "-"`
   local container_name="contrail-${container_name}"
   echo "INFO: Building $container_name"
-
   tag="${CONTRAIL_CONTAINER_TAG}"
   local build_arg_opts=''
   if [[ "$docker_ver" < '17.06' ]] ; then
@@ -81,13 +86,13 @@ function process_container() {
   local logfile='build-'$container_name'.log'
   docker build -t ${CONTRAIL_REGISTRY}'/'${container_name}:${tag} \
                -t ${CONTRAIL_REGISTRY}'/'${container_name}:${OPENSTACK_VERSION}-${tag} \
-    ${build_arg_opts} -f $docker_file ${opts} $dir |& tee $logfile
+    ${build_arg_opts} -f $docker_file ${opts} $dir 2>&1 |& tee $logfile
   exit_code=${PIPESTATUS[0]}
   if [ ${PIPESTATUS[0]} -eq 0 -a ${CONTRAIL_REGISTRY_PUSH} -eq 1 ]; then
-    docker push ${CONTRAIL_REGISTRY}'/'${container_name}:${tag} |& tee -a $logfile
+    docker push ${CONTRAIL_REGISTRY}'/'${container_name}:${tag} 2>&1 |& tee -a $logfile
     exit_code=${PIPESTATUS[0]}
     # temporary workaround; to be removed when all other components switch to new tags
-    docker push ${CONTRAIL_REGISTRY}'/'${container_name}:${OPENSTACK_VERSION}-${tag} |& tee -a $logfile
+    docker push ${CONTRAIL_REGISTRY}'/'${container_name}:${OPENSTACK_VERSION}-${tag} 2>&1 |& tee -a $logfile
   fi
   if [ ${exit_code} -eq 0 ]; then
     rm $logfile
@@ -95,6 +100,24 @@ function process_container() {
   if [ -f $logfile ]; then
     was_errors=1
   fi
+}
+
+function parallel_bild() {
+#    echo Parallel build : Not implemented yet
+
+
+    for level  in $( seq 1 $( ls ././container_map_tmp* | grep level | wc -l))
+        do
+        echo BUILDING level.$level
+        for i in $(cat $my_dir/container_map_tmp*/level.$level| cut -f1 -d' ')
+            do
+                local dir=$(echo $i | rev | cut -f2- -d/ | rev )
+                process_container $dir $i &
+            done
+            wait
+        done
+
+    return
 }
 
 function process_dir() {
@@ -179,7 +202,13 @@ if [[ "$op" == 'build' ]]; then
   update_repos "repo"
 fi
 
-process_dir $path
+if [ "$parallel" == "1"  ]
+ then
+  echo "INFO: Build would be processed in parallel mode"
+  parallel_bild
+ else
+  process_dir $path
+fi
 
 popd &>/dev/null
 

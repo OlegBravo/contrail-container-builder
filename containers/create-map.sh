@@ -61,7 +61,7 @@ rm -f $dir/tmpdf
 # main func
 rm -rf container_map_tmp.*
 dir=$(mktemp -d container_map_tmp.XXX)
-level=0
+level=1
 create_dockerfiles_map
 br=0
 while [[ $br == 0 ]]
